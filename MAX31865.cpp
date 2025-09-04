@@ -8,11 +8,11 @@
 
 #include <MAX31865.h>
 
-MAX31865::MAX31865(SPI_HandleTypeDef* mHandleSPI, const cs_Pin* mCS, modeMAX31865 mMode,
+MAX31865::MAX31865(SPI_HandleTypeDef* mHandleSPI, const pinMAX31865* mPins, modeMAX31865 mMode,
 		RTDconnecting mNumWire, filterMAX31865 mfilter)
 {
 	this->handleSPI = mHandleSPI;
-	this->csPin = mCS;
+	this->pins = mPins;
 	this->mode = mMode;
 	this->numberWire = mNumWire;
 	this->filter = mfilter;
@@ -31,25 +31,25 @@ MAX31865::MAX31865(SPI_HandleTypeDef* mHandleSPI, const cs_Pin* mCS, modeMAX3186
 bool MAX31865::initialization(void)
 {
 	this->sensorError = false;
-	this->configurationRegisterWrite[0] = 0x80;
+	this->configurationRegister[0] = 0x80;
 	if(this->numberWire == RTDconnecting::two || this->numberWire == RTDconnecting::four)
-		this->configurationRegisterWrite[1] = 0xC3;
+		this->configurationRegister[1] = 0xC3;
 	else
-		this->configurationRegisterWrite[1] = 0xD3;
+		this->configurationRegister[1] = 0xD3;
 
-	if(this->mode == modeMAX31865::normally)
-		this->configurationRegisterWrite[1] = this->configurationRegisterWrite[1] & 0xBF;
+	if(this->mode == modeMAX31865::normallyOff)
+		this->configurationRegister[1] = this->configurationRegister[1] & 0xBF;
 	if(this->filter == filterMAX31865::Hz60)
-		this->configurationRegisterWrite[1] = this->configurationRegisterWrite[1] & 0xFE;
+		this->configurationRegister[1] = this->configurationRegister[1] & 0xFE;
 
 	this->csSet();
-	HAL_SPI_Transmit(this->handleSPI, this->configurationRegisterWrite, 2, 100);
+	HAL_SPI_Transmit(this->handleSPI, this->configurationRegister, 2, 100);
 	this->csReset();
 
 	//Check MAX31865 configuration
 	uint8_t test = this->getConfiguration() & 0xD1;	//stay only bit for setting
 
-	if(test == (this->configurationRegisterWrite[1] & 0xD1))
+	if(test == (this->configurationRegister[1] & 0xD1))
 				return true;
 
 	return false;
@@ -105,24 +105,40 @@ sTemperature  MAX31865::getFilterTemperature(void)
 	return temperature;
 }
 
-bool MAX31865::getIsInit() const { if(this->isInit) return true; return false; }
+bool MAX31865::getIsInit() const { return this->isInit; }
+bool MAX31865::getIsBusy() const { return this->isBusy; }
 
-void MAX31865::csSet() { HAL_GPIO_WritePin(this->csPin->port, this->csPin->pin, GPIO_PIN_RESET); }
-void MAX31865::csReset() { HAL_GPIO_WritePin(this->csPin->port, this->csPin->pin, GPIO_PIN_SET); }
+void MAX31865::csSet() { HAL_GPIO_WritePin(this->pins->portCS, this->pins->pinCS, GPIO_PIN_RESET); }
+void MAX31865::csReset() { HAL_GPIO_WritePin(this->pins->portCS, this->pins->pinCS, GPIO_PIN_SET); }
 
 void MAX31865::read(void)
 {
+
+	if(this->mode == modeMAX31865::normallyOff)
+	{
+		uint8_t member[2];
+		member[0] = this->configurationRegister[0];
+		//Set bit 1-shot
+		member[1] = this->configurationRegister[1] | 0x20;
+		this->csSet();
+		HAL_SPI_Transmit(this->handleSPI, member, 2, 100);
+		this->csReset();
+
+		while(HAL_GPIO_ReadPin(this->pins->portDRDY, this->pins->pinDRDY) == GPIO_PIN_SET)
+		{ }
+	}
+
 	uint8_t startAddress = 0x01;
-	uint8_t rxBuffer[7] = {0x00};														//for receive data
+	uint8_t rxBuffer[7] = {0x00};													//for receive data
 	this->csSet();
 	HAL_SPI_Transmit(this->handleSPI, &startAddress, 1, 100);
 	HAL_SPI_Receive(this->handleSPI, rxBuffer, 7, 100);
 	this->csReset();
 
-	this->data.resistanceRegister = (rxBuffer[0] << 8 | rxBuffer[1]) >> 1;		//value of resistance
-	this->data.faultThresholdHight = (rxBuffer[2] << 8 | rxBuffer[3]);		//value of fault
-	this->data.faultThresholdLow = (rxBuffer[4] << 8 | rxBuffer[5]);		//value of fault
-	this->data.statusFault = rxBuffer[6];									//fault status
+	this->data.resistanceRegister = (rxBuffer[0] << 8 | rxBuffer[1]) >> 1;			//value of resistance
+	this->data.faultThresholdHight = (rxBuffer[2] << 8 | rxBuffer[3]);				//value of fault
+	this->data.faultThresholdLow = (rxBuffer[4] << 8 | rxBuffer[5]);				//value of fault
+	this->data.statusFault = rxBuffer[6];											//fault status
 
 }
 
